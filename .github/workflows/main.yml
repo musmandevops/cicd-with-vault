@@ -1,57 +1,87 @@
-name: React App CI
+name: NodeJs CI
 
 on:
   push:
     branches:
-      - 'usman'
-      - '!master'
-      
-      
+      - 'hotfix/*'
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    env:
+      VAULT_ADDR: ${{ secrets.vault_url }}
+      VAULT_NAMESPACE: ${{ secrets.vault_namespace }}
     strategy:
       matrix:
         node-version: [12.x]
-
     steps:
-    - uses: actions/checkout@v2
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v1
-      with:
-        node-version: ${{ matrix.node-version }}
-    - run: npm run unittest
-    - run: npm run build --if-present
-
-############## Create PR ################
-    - name: pull-request
-      uses: repo-sync/pull-request@v2
-      with:
-        destination_branch: "master"
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        pr_label: "feature, automated pr"
-        pr_title: "Demo"
-############ Copy to S3 #######################
-    # - name: Copy to AWS S3
-    #   steps:
-    #   - uses: jakejarvis/s3-sync-action@master
-    #     with:
-    #       args: --acl public-read --follow-symlinks --delete
-    #     env:
-    #       AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-    #       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    #       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    #       AWS_REGION: 'us-east-1'   # optional: defaults to us-east-1
-    #       SOURCE_DIR: '.'      # optional: defaults to entire repository
-
-
-################## MERGE current branch to Master #####################
-      # - name: Merge Branch to master
-      #   uses: devmasx/merge-branch@master
-      #   with:
-      #     type: now
-      #     target_branch: master
-      #     github_token: ${{ github.token }}
+      - uses: actions/checkout@v2      
+      - uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install Packages
+        run: npm ci
+      - name: Run Tests
+        run: npm test
+      - name: Create Build
+        run: npm run build
+      - uses: actions/upload-artifact@v2
+        with:
+          name: react-build
+          path: build/
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VAULT_ADDR: ${{ secrets.vault_url }}
+      VAULT_NAMESPACE: ${{ secrets.vault_namespace }}
+    steps:
+      - uses: actions/download-artifact@v2
+        with: 
+          name: react-build
+      - name: Installing Vault
+        run: |
+          sudo curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+      - run: vault login $(vault write -field=token auth/approle/login role_id=${{ secrets.roleId }} secret_id=${{ secrets.secretId }}) > /dev/null
+      - name: Get Access Key
+        run:  echo "::set-output name=access-key-id::$(vault kv get --field=ACCESS_KEY_ID kv/first_node_app_iam)"
+        id: access-key
+      - name: Get Secret Key
+        run: echo "::set-output name=secret-access-key::$(vault kv get --field=SECRET_ACCESS_KEY kv/first_node_app_iam)"
+        id: secret-key
+      - name: Get Bucket Name
+        run: echo "::set-output name=s3-bucket::$(vault kv get --field=S3_BUCKET kv/first_node_app_iam)"
+        id: bucket
+      - uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --follow-symlinks --delete
+        env:
+          AWS_S3_BUCKET: ${{ steps.bucket.outputs.s3-bucket }}
+          AWS_ACCESS_KEY_ID: ${{ steps.access-key.outputs.access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.secret-key.outputs.secret-access-key }}
+          AWS_REGION: 'us-east-1'
+          #SOURCE_DIR: '.'      # optional: defaults to entire repository
+  merge:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: Klemensas/action-autotag@stable
+        with:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          tag_prefix: "v"
+      - name: Merge Branch to master
+        uses: devmasx/merge-branch@master
+        with:
+          type: now
+          target_branch: master
+          github_token: ${{ github.token }}
+      - name: Pull Request to branch dev
+        uses: repo-sync/pull-request@v2
+        with:
+          destination_branch: "dev"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_label: "hotfix, automated pr"
+          pr_title: "Hotfix to dev branch"
