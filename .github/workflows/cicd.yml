@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: vagrant
+    runs-on: self-hosted
     strategy:
       matrix:
         node-version: [14.x]
@@ -20,10 +20,6 @@ jobs:
         run: npm ci
       - name: Run Tests
         run: npm test
-      - name: Create Build
-        run: npm run build
-      - uses: actions/upload-artifact@v2
-        with:
-          name: react-build
-          path: build/
+      - name: Build docker image
+          docker build . --file Dockerfile --tag 672892704943.dkr.ecr.ap-southeast-2.amazonaws.com/svpayments:prototype
  
