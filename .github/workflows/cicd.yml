@@ -22,5 +22,5 @@ jobs:
         run: npm test
       - name: Build docker image
         run: |
-          docker build . --file Dockerfile --tag 672892704943.dkr.ecr.ap-southeast-2.amazonaws.com/svpayments:prototype
+          docker build . --file Dockerfile --tag test:latest
  
